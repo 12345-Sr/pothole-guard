@@ -38,8 +38,8 @@ export class MockDetectionEngine implements DetectionEngine {
 
     this.frameCounter += 1;
 
-    // Simulate realistic pothole appearance every 12 to 18 frames
-    if (!this.activeSimulationTrack.active && this.frameCounter % 15 === 0) {
+    // Simulate realistic pothole appearance every ~50-60 frames (approx 10-12s in demo mode)
+    if (!this.activeSimulationTrack.active && this.frameCounter % 60 === 0) {
       this.activeSimulationTrack = {
         active: true,
         remainingFrames: 5, // Lasts for 5 consecutive frames (enough for 3-frame temporal confirmation)

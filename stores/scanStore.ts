@@ -5,6 +5,7 @@ import { TripPoint, TripSession, RoadQualityRating } from '../models/Session';
 import { detectionService } from '../services/detectionService';
 import { useLocationStore } from './locationStore';
 import { usePotholeStore } from './potholeStore';
+import { useSettingsStore } from './settingsStore';
 import { calculateDistance } from '../utils/haversine';
 
 const BACKEND_BASE = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://192.168.1.40:8000';
@@ -141,6 +142,8 @@ export const useScanStore = create<ScanState>((set, get) => ({
       }
     });
 
+    const isDemo = useSettingsStore.getState().isDemoMode;
+    detectionService.setScanMode(isDemo ? 'demo' : 'real');
     await detectionService.startScan(() => useLocationStore.getState().currentLocation);
   },
 

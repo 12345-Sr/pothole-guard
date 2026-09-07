@@ -16,6 +16,7 @@ import { usePotholeStore } from '../../stores/potholeStore';
 import { DetectionOverlay } from '../../components/DetectionOverlay';
 import { formatSpeed, formatAccuracy } from '../../utils/formatters';
 import { cameraService } from '../../services/cameraService';
+import { detectionService } from '../../services/detectionService';
 import { realtimeCameraVision } from '../../ml/RealtimeCameraVision';
 import { sharePothole } from '../../services/sharingService';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -58,7 +59,7 @@ export default function LiveScanScreen() {
 
   const addPothole = usePotholeStore((s) => s.addPothole);
   const currentLocation = useLocationStore((s) => s.currentLocation);
-  const { audioAlerts, toggleAudio } = useSettingsStore();
+  const { audioAlerts, toggleAudio, isDemoMode, toggleDemoMode } = useSettingsStore();
 
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [shutterFlash, setShutterFlash] = useState(false);
@@ -116,57 +117,12 @@ export default function LiveScanScreen() {
     setCameraActive(false);
   };
 
-  // Real-time frame analysis from live camera stream
+  // Trigger camera shutter flash whenever a confirmed detection alert occurs
   useEffect(() => {
-    let frameInterval: any;
-    if (isScanning) {
-      frameInterval = setInterval(() => {
-        if (Platform.OS === 'web' && videoRef.current) {
-          const result = realtimeCameraVision.analyzeVideoFrame(videoRef.current);
-          if (result && result.detected) {
-            // Live detection from real camera stream
-            handleLiveFrameDetection(result);
-          }
-        }
-      }, 200);
+    if (showAlert) {
+      triggerShutter();
     }
-    return () => clearInterval(frameInterval);
-  }, [isScanning]);
-
-  const handleLiveFrameDetection = async (detection: any) => {
-    // Take real-time snapshot from camera
-    const snapshotUri = await cameraService.captureEvidenceSnapshot({
-      latitude: currentLocation.latitude,
-      longitude: currentLocation.longitude,
-      timestamp: new Date().toISOString(),
-      speed: currentLocation.speed,
-    });
-
-    const newPothole = {
-      id: `pot-realtime-${Date.now()}`,
-      latitude: currentLocation.latitude,
-      longitude: currentLocation.longitude,
-      confidence: detection.confidence,
-      severity: 'high' as const,
-      status: 'detected' as const,
-      imageUrl: snapshotUri,
-      detectionTimestamp: new Date().toISOString(),
-      reportedBy: 'Realtime Camera Scanner',
-      roadName: currentLocation.roadName || 'Current Location',
-      city: currentLocation.city || 'Local Area',
-      state: currentLocation.state || '',
-      country: 'India',
-      speedAtDetection: currentLocation.speed,
-      heading: currentLocation.heading,
-      gpsAccuracy: currentLocation.accuracy,
-      voteCount: 1,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    addPothole(newPothole);
-    triggerShutter();
-  };
+  }, [showAlert]);
 
   // Manual Instant Snapshot Trigger (for point-and-scan)
   const handleManualCapture = async () => {
@@ -251,9 +207,32 @@ export default function LiveScanScreen() {
           </View>
 
           <View style={styles.topRightControls}>
+            {/* Mode Switcher: Real Camera AI vs Demo Simulation */}
+            <TouchableOpacity
+              style={[styles.modeBadge, isDemoMode ? styles.modeBadgeDemo : styles.modeBadgeReal]}
+              onPress={async () => {
+                const nextDemo = !isDemoMode;
+                await toggleDemoMode();
+                detectionService.setScanMode(nextDemo ? 'demo' : 'real');
+              }}
+              activeOpacity={0.7}
+            >
+              {isDemoMode ? (
+                <>
+                  <Sparkles size={12} color="#F59E0B" />
+                  <Text style={styles.modeTextDemo}>DEMO SIM</Text>
+                </>
+              ) : (
+                <>
+                  <ShieldCheck size={12} color="#10B981" />
+                  <Text style={styles.modeTextReal}>REAL AI</Text>
+                </>
+              )}
+            </TouchableOpacity>
+
             <View style={styles.bikeModeBadge}>
               <Bike size={14} color="#F59E0B" />
-              <Text style={styles.bikeModeText}>LIVE RIDE</Text>
+              <Text style={styles.bikeModeText}>RIDE</Text>
             </View>
 
             <TouchableOpacity style={styles.iconButton} onPress={toggleAudio}>
@@ -503,7 +482,34 @@ const styles = StyleSheet.create({
   topRightControls: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
+  },
+  modeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  modeBadgeReal: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderColor: '#10B981',
+  },
+  modeBadgeDemo: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    borderColor: '#F59E0B',
+  },
+  modeTextReal: {
+    color: '#10B981',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  modeTextDemo: {
+    color: '#F59E0B',
+    fontSize: 10,
+    fontWeight: '800',
   },
   bikeModeBadge: {
     flexDirection: 'row',

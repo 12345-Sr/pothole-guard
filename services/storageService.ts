@@ -28,7 +28,7 @@ export interface UserSettings {
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
-  isDemoMode: true, // Default to interactive demo mode for instant testing
+  isDemoMode: false, // Default to Real Camera AI scan mode
   confidenceThreshold: 0.70,
   audioAlerts: true,
   vibration: true,

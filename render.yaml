@@ -3,8 +3,8 @@ services:
     name: pothole-guard
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python backend/main.py
+    buildCommand: pip install -r requirements.txt || pip install -r backend/requirements.txt
+    startCommand: python backend/main.py || python main.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0

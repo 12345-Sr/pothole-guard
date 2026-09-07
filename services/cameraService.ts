@@ -12,6 +12,10 @@ class CameraService {
     this.videoElement = el;
   }
 
+  public getVideoElement(): any {
+    return this.videoElement;
+  }
+
   /**
    * Captures an instant evidence frame snapshot from the active camera
    * or road canvas with timestamp & GPS coordinates.

@@ -1,5 +1,6 @@
 import { DetectionEngine } from '../ml/DetectionEngine';
 import { MockDetectionEngine } from '../ml/MockDetectionEngine';
+import { realtimeCameraVision } from '../ml/RealtimeCameraVision';
 import { FrameTracker } from './duplicateService';
 import { calculateSeverity } from './severityService';
 import { audioService } from './audioService';
@@ -8,6 +9,8 @@ import { Pothole } from '../models/Pothole';
 import { DetectionResult } from '../models/Detection';
 import { LocationReading } from './locationService';
 
+export type ScanMode = 'real' | 'demo';
+
 export type DetectionEventListener = (event: {
   type: 'frame_detection' | 'confirmed_pothole';
   detection?: DetectionResult;
@@ -15,19 +18,27 @@ export type DetectionEventListener = (event: {
 }) => void;
 
 class DetectionService {
-  private engine: DetectionEngine;
+  private mockEngine: DetectionEngine;
   private frameTracker: FrameTracker;
   private isScanning: boolean = false;
+  private scanMode: ScanMode = 'real';
   private listeners: Set<DetectionEventListener> = new Set();
   private scanInterval: any = null;
+  private lastAlertTimestamp: number = 0;
+  private readonly ALERT_COOLDOWN_MS = 6000; // Minimum 6 seconds between alerts
 
   constructor() {
-    this.engine = new MockDetectionEngine();
+    this.mockEngine = new MockDetectionEngine();
     this.frameTracker = new FrameTracker(3, 0.25, 1200);
   }
 
-  public setEngine(engine: DetectionEngine): void {
-    this.engine = engine;
+  public setScanMode(mode: ScanMode): void {
+    this.scanMode = mode;
+    this.frameTracker.reset();
+  }
+
+  public getScanMode(): ScanMode {
+    return this.scanMode;
   }
 
   public subscribe(listener: DetectionEventListener): () => void {
@@ -49,19 +60,35 @@ class DetectionService {
     if (this.isScanning) return;
     this.isScanning = true;
     this.frameTracker.reset();
-    await this.engine.start();
+    this.lastAlertTimestamp = 0;
 
-    // Loop running frame evaluation at ~8 FPS (125ms intervals)
+    if (this.scanMode === 'demo') {
+      await this.mockEngine.start();
+    }
+
+    // Frame evaluation interval (~5.5 FPS / 180ms)
     this.scanInterval = setInterval(async () => {
       if (!this.isScanning) return;
 
       try {
-        const detection = await this.engine.processFrame();
+        let detection: DetectionResult | null = null;
+
+        if (this.scanMode === 'real') {
+          // Real Camera AI Mode: Inspect actual camera video element
+          const videoEl = cameraService.getVideoElement();
+          if (videoEl && videoEl.readyState >= 2) {
+            detection = realtimeCameraVision.analyzeVideoFrame(videoEl);
+          }
+          // If no video or camera is pointed at non-pothole, detection remains null!
+        } else {
+          // Demo Simulation Mode
+          detection = await this.mockEngine.processFrame();
+        }
 
         if (detection && detection.detected) {
           this.notify({ type: 'frame_detection', detection });
 
-          // Multi-frame IoU stability check
+          // Multi-frame IoU stability check (requires 3 consecutive matching frames)
           const tracking = this.frameTracker.update(
             detection.boundingBox,
             detection.confidence,
@@ -69,6 +96,13 @@ class DetectionService {
           );
 
           if (tracking.confirmed) {
+            const now = Date.now();
+            // Enforce alert cooldown to prevent sound and screenshot spamming
+            if (now - this.lastAlertTimestamp < this.ALERT_COOLDOWN_MS) {
+              return;
+            }
+            this.lastAlertTimestamp = now;
+
             const loc = getCurrentLocation();
             const severity = calculateSeverity({
               confidence: detection.confidence,
@@ -94,8 +128,8 @@ class DetectionService {
               status: 'detected',
               imageUrl: snapshotUri,
               detectionTimestamp: new Date(detection.timestamp).toISOString(),
-              reportedBy: 'Bike Ride Scanner',
-              roadName: loc.roadName || 'Main Corridor',
+              reportedBy: this.scanMode === 'real' ? 'Realtime Camera AI' : 'Simulation Engine',
+              roadName: loc.roadName || 'Current Location',
               city: loc.city || 'Kanpur',
               state: loc.state || 'Uttar Pradesh',
               country: loc.country || 'India',
@@ -107,8 +141,8 @@ class DetectionService {
               updatedAt: new Date().toISOString(),
             };
 
-            // Non-blocking voice alert for bike rider
-            audioService.playPotholeAlert('Pothole detected. Screenshot and GPS coordinates saved.');
+            // Non-blocking, calm voice alert for bike rider
+            audioService.playPotholeAlert('Caution: Pothole detected ahead.');
 
             this.notify({
               type: 'confirmed_pothole',
@@ -120,7 +154,7 @@ class DetectionService {
       } catch (err) {
         console.warn('Frame scan error', err);
       }
-    }, 125);
+    }, 180);
   }
 
   public async stopScan(): Promise<void> {
@@ -129,7 +163,9 @@ class DetectionService {
       clearInterval(this.scanInterval);
       this.scanInterval = null;
     }
-    await this.engine.stop();
+    if (this.scanMode === 'demo') {
+      await this.mockEngine.stop();
+    }
     this.frameTracker.reset();
   }
 
