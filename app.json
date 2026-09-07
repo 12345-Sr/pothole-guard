@@ -1,25 +1,57 @@
 {
   "expo": {
-    "name": "tmp_expo",
-    "slug": "tmp_expo",
+    "name": "PotholeGuard",
+    "slug": "pothole-guard",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "scheme": "potholeguard",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#090D16"
+    },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.civic.potholeguard",
+      "infoPlist": {
+        "NSCameraUsageDescription": "PotholeGuard uses your camera to scan road conditions and detect potholes while mounted.",
+        "NSLocationWhenInUseUsageDescription": "PotholeGuard uses your GPS coordinates to mark detected road hazards on the community map."
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#090D16"
       },
-      "predictiveBackGestureEnabled": false
+      "package": "com.civic.potholeguard",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.VIBRATE"
+      ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
-    }
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow PotholeGuard to access your camera for real-time road scanning."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow PotholeGuard to tag detected potholes with accurate GPS coordinates."
+        }
+      ]
+    ]
   }
 }
