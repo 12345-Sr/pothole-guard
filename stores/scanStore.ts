@@ -8,12 +8,15 @@ import { usePotholeStore } from './potholeStore';
 import { useSettingsStore } from './settingsStore';
 import { calculateDistance } from '../utils/haversine';
 
+import { VisionDiagnostic } from '../ml/RealtimeCameraVision';
+
 const BACKEND_BASE = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://192.168.1.40:8000';
 
 interface ScanState {
   isScanning: boolean;
   activeDetection: DetectionResult | null;
   lastConfirmedPothole: Pothole | null;
+  latestDiagnostic: VisionDiagnostic | null;
   showAlert: boolean;
   totalScanDetections: number;
   scanStartTime: number | null;
@@ -43,6 +46,7 @@ export const useScanStore = create<ScanState>((set, get) => ({
   isScanning: false,
   activeDetection: null,
   lastConfirmedPothole: null,
+  latestDiagnostic: null,
   showAlert: false,
   totalScanDetections: 0,
   scanStartTime: null,
@@ -139,6 +143,8 @@ export const useScanStore = create<ScanState>((set, get) => ({
         setTimeout(() => {
           set({ showAlert: false });
         }, 3500);
+      } else if (event.type === 'diagnostic_update' && event.diagnostic) {
+        set({ latestDiagnostic: event.diagnostic });
       }
     });
 

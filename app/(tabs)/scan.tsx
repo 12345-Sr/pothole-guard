@@ -46,6 +46,7 @@ export default function LiveScanScreen() {
     isScanning,
     activeDetection,
     lastConfirmedPothole,
+    latestDiagnostic,
     showAlert,
     totalScanDetections,
     startPoint,
@@ -58,7 +59,7 @@ export default function LiveScanScreen() {
   } = useScanStore();
 
   const addPothole = usePotholeStore((s) => s.addPothole);
-  const currentLocation = useLocationStore((s) => s.currentLocation);
+  const { currentLocation, isGpsLocked, gpsStatus, requestGpsPermission } = useLocationStore();
   const { audioAlerts, toggleAudio, isDemoMode, toggleDemoMode } = useSettingsStore();
 
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -243,10 +244,46 @@ export default function LiveScanScreen() {
               )}
             </TouchableOpacity>
 
-            <View style={styles.gpsIndicator}>
-              <Radio size={14} color="#10B981" />
-              <Text style={styles.gpsIndicatorText}>GPS ACTIVE</Text>
-            </View>
+            <TouchableOpacity
+              style={[
+                styles.gpsIndicator,
+                gpsStatus === 'locked' && styles.gpsIndicatorLocked,
+                gpsStatus === 'acquiring' && styles.gpsIndicatorAcquiring,
+                gpsStatus === 'denied' && styles.gpsIndicatorDenied,
+              ]}
+              onPress={async () => {
+                if (gpsStatus === 'denied') {
+                  await requestGpsPermission();
+                }
+              }}
+              activeOpacity={0.8}
+            >
+              <Radio
+                size={14}
+                color={
+                  gpsStatus === 'locked' ? '#10B981' : gpsStatus === 'acquiring' ? '#F59E0B' : '#EF4444'
+                }
+              />
+              <Text
+                style={[
+                  styles.gpsIndicatorText,
+                  {
+                    color:
+                      gpsStatus === 'locked'
+                        ? '#10B981'
+                        : gpsStatus === 'acquiring'
+                        ? '#F59E0B'
+                        : '#EF4444',
+                  },
+                ]}
+              >
+                {gpsStatus === 'locked'
+                  ? `GPS ±${Math.round(currentLocation.accuracy)}m`
+                  : gpsStatus === 'acquiring'
+                  ? 'ACQUIRING GPS...'
+                  : 'GPS BLOCKED (ENABLE)'}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -308,11 +345,42 @@ export default function LiveScanScreen() {
 
           {/* Real-Time Live Hardware GPS Coordinates Ticker */}
           <View style={styles.liveCoordinatesTicker}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveCoordinatesText}>
-              REAL GPS: {currentLocation.latitude.toFixed(6)}° N, {currentLocation.longitude.toFixed(6)}° E
+            <View
+              style={[
+                styles.liveDot,
+                gpsStatus === 'locked' ? styles.liveDotLocked : styles.liveDotAcquiring,
+              ]}
+            />
+            <Text style={styles.liveCoordinatesText} numberOfLines={1}>
+              {isGpsLocked
+                ? `REAL GPS: ${currentLocation.latitude.toFixed(6)}° N, ${currentLocation.longitude.toFixed(6)}° E • ${currentLocation.roadName || 'Roadway'}, ${currentLocation.city || 'Local Area'}`
+                : gpsStatus === 'denied'
+                ? 'GPS PERMISSION DENIED • Tap indicator above to grant'
+                : 'ACQUIRING GPS LOCK • Satellite fix in progress...'}
             </Text>
           </View>
+
+          {/* AI Road & Pothole Judge Diagnostic Telemetry Banner */}
+          {isScanning && !isDemoMode && (
+            <View
+              style={[
+                styles.aiJudgeBanner,
+                latestDiagnostic?.isRoadSurface ? styles.aiJudgeBannerRoad : styles.aiJudgeBannerNoRoad,
+              ]}
+            >
+              <Sparkles
+                size={13}
+                color={latestDiagnostic?.isRoadSurface ? '#10B981' : '#F59E0B'}
+              />
+              <Text style={styles.aiJudgeBannerText} numberOfLines={1}>
+                {latestDiagnostic
+                  ? latestDiagnostic.isRoadSurface
+                    ? `AI ROAD LOCKED • ${latestDiagnostic.candidateVerdict}`
+                    : `AI: ${latestDiagnostic.roadStatusMessage}`
+                  : 'AI ROAD VERIFIER ACTIVE (Scanning for asphalt...)'}
+              </Text>
+            </View>
+          )}
 
           {/* Live Point A Origin & Route Potholes Counter */}
           {isScanning && startPoint && (
@@ -611,11 +679,57 @@ const styles = StyleSheet.create({
     gap: 8,
     zIndex: 20,
   },
+  gpsIndicatorLocked: {
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    borderColor: '#10B981',
+  },
+  gpsIndicatorAcquiring: {
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    borderColor: '#F59E0B',
+  },
+  gpsIndicatorDenied: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderColor: '#EF4444',
+  },
   liveDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
     backgroundColor: '#10B981',
+  },
+  liveDotLocked: {
+    backgroundColor: '#10B981',
+  },
+  liveDotAcquiring: {
+    backgroundColor: '#F59E0B',
+  },
+  aiJudgeBanner: {
+    position: 'absolute',
+    top: 48,
+    left: 14,
+    right: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    zIndex: 20,
+  },
+  aiJudgeBannerRoad: {
+    backgroundColor: 'rgba(15, 23, 42, 0.92)',
+    borderColor: 'rgba(16, 185, 129, 0.4)',
+  },
+  aiJudgeBannerNoRoad: {
+    backgroundColor: 'rgba(30, 20, 10, 0.92)',
+    borderColor: 'rgba(245, 158, 11, 0.5)',
+  },
+  aiJudgeBannerText: {
+    color: '#F8FAFC',
+    fontSize: 11,
+    fontWeight: '700',
+    flex: 1,
   },
   liveCoordinatesText: {
     color: '#38BDF8',

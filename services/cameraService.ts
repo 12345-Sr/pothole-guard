@@ -78,10 +78,11 @@ class CameraService {
 
           ctx.fillStyle = '#38bdf8';
           ctx.font = 'bold 14px monospace';
-          const latStr = metadata?.latitude ? metadata.latitude.toFixed(6) : '26.449900';
-          const lonStr = metadata?.longitude ? metadata.longitude.toFixed(6) : '80.331900';
-          const speedStr = metadata?.speed ? `${Math.round(metadata.speed)} km/h` : '35 km/h';
-          ctx.fillText(`POTHOLEGUARD EVIDENCE | GPS: ${latStr}° N, ${lonStr}° E | SPEED: ${speedStr}`, 15, 325);
+          const latStr = metadata?.latitude ? `${metadata.latitude.toFixed(6)}° N` : 'GPS Acquiring';
+          const lonStr = metadata?.longitude ? `${metadata.longitude.toFixed(6)}° E` : '';
+          const speedStr = metadata?.speed !== undefined ? `${Math.round(metadata.speed)} km/h` : '0 km/h';
+          const gpsLabel = lonStr ? `GPS: ${latStr}, ${lonStr}` : latStr;
+          ctx.fillText(`POTHOLEGUARD EVIDENCE | ${gpsLabel} | SPEED: ${speedStr}`, 15, 325);
 
           ctx.fillStyle = '#94a3b8';
           ctx.font = '12px monospace';

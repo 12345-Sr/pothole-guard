@@ -1,6 +1,6 @@
 import { DetectionEngine } from '../ml/DetectionEngine';
 import { MockDetectionEngine } from '../ml/MockDetectionEngine';
-import { realtimeCameraVision } from '../ml/RealtimeCameraVision';
+import { realtimeCameraVision, VisionDiagnostic } from '../ml/RealtimeCameraVision';
 import { FrameTracker } from './duplicateService';
 import { calculateSeverity } from './severityService';
 import { audioService } from './audioService';
@@ -12,9 +12,10 @@ import { LocationReading } from './locationService';
 export type ScanMode = 'real' | 'demo';
 
 export type DetectionEventListener = (event: {
-  type: 'frame_detection' | 'confirmed_pothole';
+  type: 'frame_detection' | 'confirmed_pothole' | 'diagnostic_update';
   detection?: DetectionResult;
   pothole?: Pothole;
+  diagnostic?: VisionDiagnostic;
 }) => void;
 
 class DetectionService {
@@ -25,11 +26,12 @@ class DetectionService {
   private listeners: Set<DetectionEventListener> = new Set();
   private scanInterval: any = null;
   private lastAlertTimestamp: number = 0;
-  private readonly ALERT_COOLDOWN_MS = 6000; // Minimum 6 seconds between alerts
+  private readonly ALERT_COOLDOWN_MS = 7000; // Minimum 7 seconds between alerts
 
   constructor() {
     this.mockEngine = new MockDetectionEngine();
-    this.frameTracker = new FrameTracker(3, 0.25, 1200);
+    // 4 consecutive stable frames required (approx ~720ms sustained tracking with IoU >= 0.30)
+    this.frameTracker = new FrameTracker(4, 0.30, 1400);
   }
 
   public setScanMode(mode: ScanMode): void {
@@ -78,8 +80,9 @@ class DetectionService {
           const videoEl = cameraService.getVideoElement();
           if (videoEl && videoEl.readyState >= 2) {
             detection = realtimeCameraVision.analyzeVideoFrame(videoEl);
+            const diag = realtimeCameraVision.getDiagnostic();
+            this.notify({ type: 'diagnostic_update', diagnostic: diag });
           }
-          // If no video or camera is pointed at non-pothole, detection remains null!
         } else {
           // Demo Simulation Mode
           detection = await this.mockEngine.processFrame();
@@ -88,14 +91,15 @@ class DetectionService {
         if (detection && detection.detected) {
           this.notify({ type: 'frame_detection', detection });
 
-          // Multi-frame IoU stability check (requires 3 consecutive matching frames)
+          // Multi-frame IoU stability check (requires 4 consecutive matching frames)
           const tracking = this.frameTracker.update(
             detection.boundingBox,
             detection.confidence,
             detection.timestamp
           );
 
-          if (tracking.confirmed) {
+          // Pothole confirmation gate: requires multi-frame tracking + high confidence
+          if (tracking.confirmed && detection.confidence >= 0.80) {
             const now = Date.now();
             // Enforce alert cooldown to prevent sound and screenshot spamming
             if (now - this.lastAlertTimestamp < this.ALERT_COOLDOWN_MS) {
@@ -111,7 +115,7 @@ class DetectionService {
               voteCount: 1,
             });
 
-            // Automatically take screenshot of the road ahead with the detected pothole
+            // Automatically capture evidence screenshot ONLY for confirmed potholes
             const snapshotUri = await cameraService.captureEvidenceSnapshot({
               latitude: loc.latitude,
               longitude: loc.longitude,
@@ -129,9 +133,9 @@ class DetectionService {
               imageUrl: snapshotUri,
               detectionTimestamp: new Date(detection.timestamp).toISOString(),
               reportedBy: this.scanMode === 'real' ? 'Realtime Camera AI' : 'Simulation Engine',
-              roadName: loc.roadName || 'Current Location',
-              city: loc.city || 'Kanpur',
-              state: loc.state || 'Uttar Pradesh',
+              roadName: loc.roadName || 'Current Roadway',
+              city: loc.city || 'Local Area',
+              state: loc.state || '',
               country: loc.country || 'India',
               speedAtDetection: loc.speed,
               heading: loc.heading,
@@ -141,7 +145,7 @@ class DetectionService {
               updatedAt: new Date().toISOString(),
             };
 
-            // Non-blocking, calm voice alert for bike rider
+            // Calm, non-blocking audio alert
             audioService.playPotholeAlert('Caution: Pothole detected ahead.');
 
             this.notify({

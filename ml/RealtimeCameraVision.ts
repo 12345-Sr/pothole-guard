@@ -1,8 +1,26 @@
 import { DetectionResult, BoundingBox } from '../models/Detection';
+import { PotholeJudge, RoadSurfaceVerdict, PotholeCavityVerdict } from './PotholeJudge';
+
+export interface VisionDiagnostic {
+  isRoadSurface: boolean;
+  roadStatusMessage: string;
+  anomalyDetected: boolean;
+  candidateVerdict: string;
+  rimGradient: number;
+  lastAnalyzedTimestamp: number;
+}
 
 export class RealtimeCameraVision {
   private canvas: any = null;
   private ctx: any = null;
+  private lastDiagnostic: VisionDiagnostic = {
+    isRoadSurface: false,
+    roadStatusMessage: 'Initializing camera vision...',
+    anomalyDetected: false,
+    candidateVerdict: 'STANDBY',
+    rimGradient: 0,
+    lastAnalyzedTimestamp: Date.now(),
+  };
 
   constructor() {
     if (typeof document !== 'undefined') {
@@ -13,11 +31,16 @@ export class RealtimeCameraVision {
     }
   }
 
+  public getDiagnostic(): VisionDiagnostic {
+    return this.lastDiagnostic;
+  }
+
   /**
    * Analyzes an actual HTML5 video element frame from the live camera stream.
-   * Uses robust photometric contrast, road surface statistics, and geometric aspect-ratio
-   * filtering to accurately identify isolated road potholes while rejecting indoor shadows,
-   * walls, uniform dark floors, and camera noise.
+   * Leverages PotholeJudge to:
+   * 1. Validate authentic road asphalt surface (rejects rooms, desks, carpets, clothing, sky).
+   * 2. Validate cavity rim fracture gradients (rejects diffuse shadows).
+   * 3. Validate perimeter isolation (rejects bike tires, handlebars, rider feet).
    */
   public analyzeVideoFrame(videoElement: any): DetectionResult | null {
     if (!videoElement || !this.ctx || videoElement.readyState < 2) {
@@ -37,65 +60,51 @@ export class RealtimeCameraVision {
 
       const imgData = this.ctx.getImageData(0, startY, width, scanHeight);
       const data = imgData.data;
-      const totalPixels = width * scanHeight;
 
-      // 2. Compute road surface mean luminance and variance
-      let sumLuminance = 0;
-      const sampleStep = 4; // Sample every 4 pixels for high performance
-      let sampledCount = 0;
+      // 2. Stage 1: Road Surface Verification
+      const roadVerdict: RoadSurfaceVerdict = PotholeJudge.verifyRoadSurface(
+        data,
+        width,
+        scanHeight,
+        4
+      );
 
-      for (let y = 0; y < scanHeight; y += sampleStep) {
-        for (let x = 0; x < width; x += sampleStep) {
-          const idx = (y * width + x) * 4;
-          const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-          sumLuminance += lum;
-          sampledCount++;
-        }
-      }
-
-      const meanLuminance = sumLuminance / (sampledCount || 1);
-
-      // Ambient light check: Ignore extremely dark conditions (< 35) or washed out frames (> 240)
-      if (meanLuminance < 35 || meanLuminance > 240) {
+      if (!roadVerdict.isRoad) {
+        this.lastDiagnostic = {
+          isRoadSurface: false,
+          roadStatusMessage: roadVerdict.reason,
+          anomalyDetected: false,
+          candidateVerdict: 'NON_ROAD_SURFACE',
+          rimGradient: 0,
+          lastAnalyzedTimestamp: Date.now(),
+        };
         return null;
       }
 
-      // Compute standard deviation of road surface
-      let sumSquaredDiff = 0;
-      for (let y = 0; y < scanHeight; y += sampleStep) {
-        for (let x = 0; x < width; x += sampleStep) {
-          const idx = (y * width + x) * 4;
-          const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-          const diff = lum - meanLuminance;
-          sumSquaredDiff += diff * diff;
-        }
-      }
-      const stdDev = Math.sqrt(sumSquaredDiff / (sampledCount || 1));
-
-      // Uniform surface rejection: If scene has very low texture variance (e.g. wall, plain floor, lens covered)
-      if (stdDev < 14) {
-        return null;
-      }
-
-      // 3. Local depression threshold:
-      // A pothole crater on asphalt is significantly darker than the surrounding road surface.
-      // Must be at least 32 luminance units darker and 1.7x the road standard deviation.
-      const depressionDelta = Math.max(32, stdDev * 1.7);
-      const craterThreshold = meanLuminance - depressionDelta;
+      // 3. Stage 2: Candidate Depression Identification
+      const sampleStep = 4;
+      const depressionDelta = Math.max(34, roadVerdict.textureVariance * 1.8);
+      const craterThreshold = roadVerdict.meanLuminance - depressionDelta;
 
       if (craterThreshold <= 10) {
-        return null; // Road is already too dark for a distinguishable pothole
+        this.lastDiagnostic = {
+          isRoadSurface: true,
+          roadStatusMessage: 'Road dark / night conditions',
+          anomalyDetected: false,
+          candidateVerdict: 'INSUFFICIENT_CONTRAST',
+          rimGradient: 0,
+          lastAnalyzedTimestamp: Date.now(),
+        };
+        return null;
       }
 
-      // Identify candidate crater pixels
       let craterPixelsCount = 0;
       let minX = width;
       let maxX = 0;
       let minY = scanHeight;
       let maxY = 0;
-      let craterLumSum = 0;
 
-      // We stay slightly away from the extreme left/right edges (road borders/handlebar zone)
+      // Margin away from lateral edges
       const marginX = Math.floor(width * 0.08);
 
       for (let y = 0; y < scanHeight; y += sampleStep) {
@@ -105,7 +114,6 @@ export class RealtimeCameraVision {
 
           if (lum < craterThreshold) {
             craterPixelsCount++;
-            craterLumSum += lum;
             if (x < minX) minX = x;
             if (x > maxX) maxX = x;
             if (y < minY) minY = y;
@@ -117,81 +125,58 @@ export class RealtimeCameraVision {
       const clusterWidth = maxX - minX;
       const clusterHeight = maxY - minY;
 
-      // 4. Cluster size constraints:
-      // Minimum size: ~40px wide, ~25px high (not tiny pebble noise)
-      // Maximum size: 60% of road width, 65% of road height (not a huge shadow cast across the whole road)
+      // Reject tiny noise or oversized global shadows
       if (
-        craterPixelsCount < 110 ||
-        clusterWidth < 40 ||
-        clusterHeight < 24 ||
+        craterPixelsCount < 100 ||
+        clusterWidth < 38 ||
+        clusterHeight < 22 ||
         clusterWidth > width * 0.62 ||
-        clusterHeight > scanHeight * 0.65
+        clusterHeight > scanHeight * 0.60
       ) {
+        this.lastDiagnostic = {
+          isRoadSurface: true,
+          roadStatusMessage: 'Road Locked (Asphalt verified)',
+          anomalyDetected: false,
+          candidateVerdict: 'ROAD_CLEAR',
+          rimGradient: 0,
+          lastAnalyzedTimestamp: Date.now(),
+        };
         return null;
       }
 
-      // 5. Aspect ratio check:
-      // Potholes are natural craters/depressions with width/height ratio between 0.55 and 2.6
-      const aspectRatio = clusterWidth / clusterHeight;
-      if (aspectRatio < 0.55 || aspectRatio > 2.6) {
-        return null;
-      }
-
-      // 6. Perimeter Isolation Verification:
-      // An authentic pothole is surrounded by normal, brighter road surface.
-      // If the perimeter is also dark, it is part of a large continuous shadow or dark object.
-      let perimeterBrightPoints = 0;
-      let perimeterTotalPoints = 0;
-
-      const testPerimeterPoint = (px: number, py: number) => {
-        if (px >= 0 && px < width && py >= 0 && py < scanHeight) {
-          const idx = (py * width + px) * 4;
-          const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-          perimeterTotalPoints++;
-          if (lum >= craterThreshold + 15) {
-            perimeterBrightPoints++;
-          }
-        }
-      };
-
-      const centerX = Math.floor((minX + maxX) / 2);
-      const centerY = Math.floor((minY + maxY) / 2);
-      const padX = 14;
-      const padY = 10;
-
-      // Top boundary points
-      testPerimeterPoint(centerX, Math.max(0, minY - padY));
-      testPerimeterPoint(minX, Math.max(0, minY - padY));
-      testPerimeterPoint(maxX, Math.max(0, minY - padY));
-
-      // Bottom boundary points
-      testPerimeterPoint(centerX, Math.min(scanHeight - 1, maxY + padY));
-      testPerimeterPoint(minX, Math.min(scanHeight - 1, maxY + padY));
-      testPerimeterPoint(maxX, Math.min(scanHeight - 1, maxY + padY));
-
-      // Left & right points
-      testPerimeterPoint(Math.max(0, minX - padX), centerY);
-      testPerimeterPoint(Math.min(width - 1, maxX + padX), centerY);
-
-      // Require at least 65% of perimeter test points to be clear road
-      const perimeterIsolationRatio = perimeterTotalPoints > 0 ? perimeterBrightPoints / perimeterTotalPoints : 0;
-      if (perimeterIsolationRatio < 0.65) {
-        return null; // Surrounded by darkness -> false positive shadow
-      }
-
-      // 7. Calculate confidence score based on depth contrast and perimeter isolation
-      const avgCraterLum = craterLumSum / (craterPixelsCount || 1);
-      const contrastRatio = (meanLuminance - avgCraterLum) / (meanLuminance || 1);
-      const confidence = Math.min(
-        0.96,
-        Math.max(0.72, 0.65 + contrastRatio * 0.35 + perimeterIsolationRatio * 0.15)
+      // 4. Stage 3: Pothole Judge Cavity & Rim Analysis
+      const cavityVerdict: PotholeCavityVerdict = PotholeJudge.judgeCandidateCavity(
+        data,
+        width,
+        scanHeight,
+        { minX, maxX, minY, maxY, craterPixelsCount },
+        roadVerdict.meanLuminance,
+        craterThreshold
       );
 
-      if (confidence < 0.74) {
-        return null;
+      if (!cavityVerdict.isPothole) {
+        this.lastDiagnostic = {
+          isRoadSurface: true,
+          roadStatusMessage: 'Road Locked',
+          anomalyDetected: true,
+          candidateVerdict: cavityVerdict.reason,
+          rimGradient: cavityVerdict.rimGradient,
+          lastAnalyzedTimestamp: Date.now(),
+        };
+        return null; // Rigorously filtered: NOT A POTHOLE
       }
 
-      // Normalize bounding box coordinates [0, 1]
+      // 5. Confirmed candidate meets all criteria
+      this.lastDiagnostic = {
+        isRoadSurface: true,
+        roadStatusMessage: 'Road Locked',
+        anomalyDetected: true,
+        candidateVerdict: `Confirmed Pothole (Rim: ${cavityVerdict.rimGradient})`,
+        rimGradient: cavityVerdict.rimGradient,
+        lastAnalyzedTimestamp: Date.now(),
+      };
+
+      // Normalized coordinates [0, 1]
       const normX = Math.max(0.04, minX / width);
       const normY = Math.max(0.40, (minY + startY) / height);
       const normW = Math.min(0.85, clusterWidth / width);
@@ -199,7 +184,7 @@ export class RealtimeCameraVision {
 
       return {
         detected: true,
-        confidence: Number(confidence.toFixed(2)),
+        confidence: cavityVerdict.confidence,
         boundingBox: {
           x: normX,
           y: normY,
@@ -209,7 +194,7 @@ export class RealtimeCameraVision {
         className: 'pothole',
         timestamp: Date.now(),
       };
-    } catch (err) {
+    } catch {
       return null;
     }
   }
